@@ -121,6 +121,7 @@ export interface BoardRow {
     age_days: number | null;
   };
   farm_steps: string[];
+  readiness: number;
 }
 
 /** The dashboard's compact view of one row, with farm plans generated in the page. */
@@ -143,6 +144,7 @@ export interface RadarRow {
   chain_multiplier: number;
   /** True when the protocol is on the snapshot's watchlist (the floor, never the ceiling). */
   watchlist: boolean;
+  readiness: number;
 }
 
 /** A live-token protocol: it already trades, so the board shows the market's own value, not a model's. */
@@ -179,6 +181,8 @@ export interface RadarData {
   global_comps_multiple: number;
   rows: RadarRow[];
   live: LiveRow[];
+  chains: ChainRow[];
+  readiness_summary: ReadinessSummary;
 }
 
 /** Why the snapshot is not one this model can score. */
@@ -365,6 +369,7 @@ export function buildBoard(
       chain_multiplier: round4(s.chainMult),
       age_days: s.age,
     },
+    readiness: readinessScore(s.p, snapshot.watchlist.includes(s.p.slug)),
     farm_steps: farmSteps(s.p, s.age).map(stepText),
   }));
   return { board, comps: table, globalComps: global };
@@ -488,6 +493,149 @@ export function liveRows(snapshot: Snapshot): LiveRow[] {
     }));
 }
 
+/** One chain's share of the ranked board: how many of the board's protocols run there, what they
+ *  are worth together, and the strongest launch on that chain. A chain hosting many high-value
+ *  pre-token protocols is where the next launch is most likely to land, so the dashboard shows
+ *  this table beside the board. A protocol on several chains counts once under each of them, and
+ *  a protocol naming no chain at all lands under one shared bucket instead of vanishing. */
+export interface ChainRow {
+  chain: string;
+  protocols: number;
+  total_tvl_usd: number;
+  total_implied_usd: number;
+  median_multiple: number;
+  share_pct: number;
+  top_protocol: string;
+  top_implied_usd: number;
+}
+
+/** How launch-ready the whole board looks, counted by band: how many rows are close to a launch,
+ *  how many are warming up, how many are still early, and the board's mean score. */
+export interface ReadinessSummary {
+  high: number;
+  mid: number;
+  low: number;
+  average: number;
+}
+
+/** A fraction pinned to the unit interval, for scoring parts that must stay between 0 and 1. */
+function clamp01(x: number): number {
+  if (!Number.isFinite(x)) return 0;
+  if (x < 0) return 0;
+  if (x > 1) return 1;
+  return x;
+}
+
+/** The band a readiness score falls in: close to a launch, warming up, or still early days. */
+export function readinessBand(score: number): 'high' | 'mid' | 'low' {
+  if (score >= 70) return 'high';
+  if (score >= 45) return 'mid';
+  return 'low';
+}
+
+/**
+ * Launch readiness, 0 to 100: how close a pre-token protocol looks to a launch, read from the
+ * snapshot's own figures. Size carries the most weight, because a launch is priced off the value
+ * already locked in the protocol; reach adds up to a fifth, because each extra chain is another
+ * audience of farmers; momentum adds up to a quarter, because a protocol still growing is one
+ * the market is still discovering. A watchlist protocol earns a bonus for already clearing the
+ * floor. The score never moves a rank: it is a second lens on the same board, not a second
+ * ranking, and two protocols with the same figures always get the same score.
+ */
+export function readinessScore(p: SnapshotProtocol, watchlisted: boolean): number {
+  const sizePoints = clamp01((Math.log10(Math.max(1, p.tvl_usd)) - 4) / 5) * 40;
+  const reachPoints = (Math.min(p.chains.length, 5) / 5) * 20;
+  const momentumRaw = p.change_7d === null ? 0 : Math.min(120, Math.max(-60, p.change_7d));
+  const momentumPoints = ((momentumRaw + 60) / 180) * 25;
+  const floorBonus = watchlisted ? 15 : 0;
+  const total = sizePoints + reachPoints + momentumPoints + floorBonus;
+  return Math.min(100, Math.max(0, Math.round(total)));
+}
+
+/** One chain's accumulator while the board is swept: counts, sums, multiples and the top row. */
+interface ChainAccumulator {
+  count: number;
+  tvl: number;
+  impliedUsd: number;
+  multiples: number[];
+  bestName: string;
+  bestImplied: number;
+}
+
+/**
+ * The board broken down by chain: for every chain the ranked protocols run on, how many of them
+ * run there, their combined TVL, their combined implied value, the median multiple behind that
+ * value, and the strongest launch on the chain. Chains come out strongest first, ties broken by
+ * name, so the table's order is as deterministic as the board's. The medians reuse the model's
+ * own median, so the table and the board agree on the number.
+ */
+export function chainBreakdown(board: BoardRow[]): ChainRow[] {
+  const acc = new Map<string, ChainAccumulator>();
+  for (const row of board) {
+    const homes = row.chains.length > 0 ? row.chains : ['Unknown chain'];
+    for (const chain of homes) {
+      const slot = acc.get(chain) ?? { count: 0, tvl: 0, impliedUsd: 0, multiples: [], bestName: '', bestImplied: -1 };
+      slot.count += 1;
+      slot.tvl += row.tvl_usd;
+      slot.impliedUsd += row.implied_value_usd;
+      slot.multiples.push(row.model.comps_multiple);
+      if (row.implied_value_usd > slot.bestImplied) {
+        slot.bestName = row.name;
+        slot.bestImplied = row.implied_value_usd;
+      }
+      acc.set(chain, slot);
+    }
+  }
+  const rows: ChainRow[] = [];
+  for (const [chain, slot] of acc) {
+    const ordered = slot.multiples.slice().sort((a, b) => a - b);
+    rows.push({
+      chain,
+      protocols: slot.count,
+      total_tvl_usd: slot.tvl,
+      total_implied_usd: slot.impliedUsd,
+      share_pct: 0,
+      median_multiple: round4(median(ordered)),
+      top_protocol: slot.bestName,
+      top_implied_usd: slot.bestImplied,
+    });
+  }
+  rows.sort((a, b) => b.total_implied_usd - a.total_implied_usd || (a.chain < b.chain ? -1 : a.chain > b.chain ? 1 : 0));
+  const grandImplied = rows.reduce((sum, r) => sum + r.total_implied_usd, 0);
+  for (const r of rows) r.share_pct = grandImplied > 0 ? Math.round((r.total_implied_usd / grandImplied) * 1000) / 10 : 0;
+  return rows;
+}
+
+/** The chain carrying the most implied value, or null when the board names no chain at all. */
+export function strongestChain(chains: ChainRow[]): ChainRow | null {
+  let best: ChainRow | null = null;
+  for (const c of chains) {
+    if (best === null || c.total_implied_usd > best.total_implied_usd) best = c;
+  }
+  return best;
+}
+
+/**
+ * The board's readiness in four numbers: how many rows sit in each band, and the mean score.
+ * The bands come from the same thresholds the dashboard paints, so the summary and the badges
+ * never disagree about what counts as close to a launch.
+ */
+export function summarizeReadiness(board: BoardRow[]): ReadinessSummary {
+  let high = 0;
+  let mid = 0;
+  let low = 0;
+  let total = 0;
+  for (const row of board) {
+    total += row.readiness;
+    const band = readinessBand(row.readiness);
+    if (band === 'high') high += 1;
+    else if (band === 'mid') mid += 1;
+    else low += 1;
+  }
+  const average = board.length > 0 ? Math.round((total / board.length) * 10) / 10 : 0;
+  return { high, mid, low, average };
+}
+
 /** A board row's compact form for data.js, with the farm plan generated in the page. */
 export function radarRow(row: BoardRow, watchlist: Set<string>): RadarRow {
   return {
@@ -508,6 +656,7 @@ export function radarRow(row: BoardRow, watchlist: Set<string>): RadarRow {
     maturity_multiplier: row.model.maturity_multiplier,
     chain_multiplier: row.model.chain_multiplier,
     watchlist: watchlist.has(row.slug),
+    readiness: row.readiness,
   };
 }
 
@@ -530,6 +679,8 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
     global_comps_multiple: round4(globalComps),
     rows: board.map((r) => radarRow(r, new Set(snapshot.watchlist))),
     live,
+    chains: chainBreakdown(board),
+    readiness_summary: summarizeReadiness(board),
   };
   return { board, radar };
 }
