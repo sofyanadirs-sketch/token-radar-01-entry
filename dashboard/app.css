@@ -148,3 +148,96 @@ tbody tr.top3 td:first-child { color: var(--gold); font-weight: 700; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition-duration: 0.01ms !important; animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; }
 }
+
+/* Chain breakdown: the per-chain table beside the board, and the readiness badges the rows
+   and the detail view wear. Badges are pills so they read at a glance in a dense table; the
+   high band takes the growth green, the middle band the board's gold, the low band stays quiet. */
+.chains {
+  margin-top: var(--step-5);
+  padding: var(--step-4) var(--step-5);
+  display: grid;
+  gap: var(--step-3);
+}
+.chains h2 {
+  font-size: 20px;
+}
+.chains .table-wrap {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-control);
+}
+.chains table {
+  font-size: 14px;
+}
+.chains th:last-child,
+.chains td:last-child {
+  text-align: left;
+}
+.chains td:nth-child(2),
+.chains td:nth-child(6) {
+  text-align: right;
+}
+.chains th:nth-child(2),
+.chains th:nth-child(6) {
+  text-align: right;
+}
+.chains tr.totals td {
+  border-top: 2px solid var(--border);
+  border-bottom: 0;
+  font-weight: 600;
+  background: var(--surface-2);
+}
+.badge-ready {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.6;
+  white-space: nowrap;
+}
+.badge-ready.band-high {
+  background: color-mix(in srgb, var(--accent) 20%, transparent);
+  color: var(--accent);
+}
+.badge-ready.band-mid {
+  background: color-mix(in srgb, var(--gold) 20%, transparent);
+  color: var(--gold);
+}
+.badge-ready.band-low {
+  background: var(--surface-2);
+  color: var(--muted);
+  border: 1px solid var(--border);
+}
+.badge-ready.band-unscored {
+  background: transparent;
+  color: var(--muted);
+  border: 1px dashed var(--border);
+}
+.detail .badge-ready {
+  margin-top: var(--step-2);
+}
+.detail .equation .num {
+  text-align: right;
+}
+.chains caption {
+  caption-side: top;
+  text-align: left;
+  padding-bottom: var(--step-2);
+}
+.chains .bar {
+  width: 90px;
+}
+.chains .name b {
+  font-size: 13px;
+}
+@media (max-width: 640px) {
+  .chains {
+    padding: var(--step-4);
+  }
+  .badge-ready {
+    font-size: 10px;
+    padding: 1px 6px;
+  }
+}

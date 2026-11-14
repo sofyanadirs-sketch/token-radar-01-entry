@@ -25,6 +25,31 @@
     if (days >= 365) return (days / 365).toFixed(1) + 'y';
     return Math.max(0, Math.round(days)) + 'd';
   }
+  // Readiness, the model's second lens: a 0-100 score main.ts writes per row, painted here as a
+  // badge. Same thresholds as the model's own bands, so the badge and the summary never disagree.
+  function fmtScore(score) {
+    if (score === null || score === undefined || !isFinite(score)) return 'n/a';
+    return Math.round(score) + ' / 100';
+  }
+  function readinessBand(score) {
+    if (score === null || score === undefined) return 'unscored';
+    if (score >= 70) return 'high';
+    if (score >= 45) return 'mid';
+    return 'low';
+  }
+  function readinessLabel(score) {
+    var band = readinessBand(score);
+    if (band === 'high') return 'Launch-ready';
+    if (band === 'mid') return 'Warming up';
+    if (band === 'low') return 'Early days';
+    return 'Unscored';
+  }
+  function readinessBadge(score) {
+    return el('span', { class: 'badge-ready band-' + readinessBand(score), text: readinessLabel(score) + ' · ' + fmtScore(score) });
+  }
+  function readinessExplainer() {
+    return 'Readiness is a 0-100 score from the same snapshot figures as implied value: size up to 40, reach across chains up to 20, seven-day momentum up to 25, and 15 more for clearing the watchlist floor. It never moves a rank.';
+  }
   // The radar-2 model in one function: the page recomputes a row from the snapshot figures and
   // checks the number board.json carries, so the page's code and the board's data are visibly the
   // same arithmetic. comps_multiple is the category's median market-cap / TVL among live tokens.
@@ -154,6 +179,7 @@
       else if (key === 'tvl') { av = a.tvl_usd; bv = b.tvl_usd; }
       else if (key === 'growth') { av = a.change_7d === null ? -Infinity : a.change_7d; bv = b.change_7d === null ? -Infinity : b.change_7d; }
       else if (key === 'age') { av = a.age_days === null ? Infinity : a.age_days; bv = b.age_days === null ? Infinity : b.age_days; }
+      else if (key === 'readiness') { av = a.readiness === null || a.readiness === undefined ? -1 : a.readiness; bv = b.readiness === null || b.readiness === undefined ? -1 : b.readiness; }
       else { av = a.implied_value_usd; bv = b.implied_value_usd; }
       if (av < bv) return -state.dir;
       if (av > bv) return state.dir;
@@ -184,7 +210,9 @@
         el('div', { class: 'fact' }, el('span', { text: 'Watchlist covered' }), el('b', { text: DATA.watchlist_size + ' / ' + DATA.watchlist_size })),
         el('div', { class: 'fact' }, el('span', { text: 'Pre-token rows scored' }), el('b', { text: String(DATA.board_size) })),
         el('div', { class: 'fact' }, el('span', { text: 'Early rows below the floor' }), el('b', { text: String(DATA.early_size) })),
-        el('div', { class: 'fact' }, el('span', { text: 'Live-token protocols set aside' }), el('b', { text: String(DATA.live_size) }))
+        el('div', { class: 'fact' }, el('span', { text: 'Live-token protocols set aside' }), el('b', { text: String(DATA.live_size) })),
+        el('div', { class: 'fact' }, el('span', { text: 'Chains on the board' }), el('b', { text: String((DATA.chains || []).length) })),
+        el('div', { class: 'fact' }, el('span', { text: 'Launch-ready rows' }), el('b', { text: DATA.readiness_summary ? String(DATA.readiness_summary.high) + ' of ' + DATA.board_size : 'n/a' }))
       )
     );
   }
@@ -262,6 +290,7 @@
           el('div', { class: 'bar', 'aria-hidden': 'true' }, el('i', { style: 'width:' + Math.max(3, Math.round((r.implied_value_usd / max) * 100)) + '%' })),
           el('span', { class: 'num', text: fmtUsd(r.implied_value_usd) })
         )),
+        el('td', null, readinessBadge(r.readiness)),
         el('td', null, el('span', { class: 'status', text: 'no token' }))
       );
       tbody.appendChild(tr);
@@ -277,6 +306,7 @@
             sortHeader('growth', '7d'),
             sortHeader('age', 'Age'),
             sortHeader('implied', 'Implied value'),
+            sortHeader('readiness', 'Readiness'),
             el('th', { scope: 'col', text: 'Token' })
           )),
           tbody
@@ -308,6 +338,57 @@
     );
   }
 
+  function chainPanel() {
+    var chains = DATA.chains || [];
+    var totalTvl = chains.reduce(function (sum, c) { return sum + c.total_tvl_usd; }, 0);
+    var totalImplied = chains.reduce(function (sum, c) { return sum + c.total_implied_usd; }, 0);
+    var totalRows = chains.reduce(function (sum, c) { return sum + c.protocols; }, 0);
+    var top = chains.length > 0 ? chains[0] : null;
+    var chainBody = el('tbody');
+    chains.forEach(function (c) {
+      var share = typeof c.share_pct === 'number' ? c.share_pct : 0;
+      var bar = el('div', { class: 'bar', 'aria-hidden': 'true' }, el('i', { style: 'width:' + Math.max(3, Math.round(share)) + '%' }));
+      chainBody.appendChild(el('tr', null,
+        el('td', null, el('b', { text: c.chain })),
+        el('td', { class: 'num', text: String(c.protocols) }),
+        el('td', { class: 'num', text: fmtUsd(c.total_tvl_usd) }),
+        el('td', null, el('div', { class: 'implied' }, bar, el('span', { class: 'num', text: fmtUsd(c.total_implied_usd) }))),
+        el('td', { class: 'num', text: 'x' + c.median_multiple }),
+        el('td', { class: 'num', text: share.toFixed(1) + '%' }),
+        el('td', null, el('div', { class: 'name' }, el('b', { text: c.top_protocol }), el('span', { class: 'sub', text: fmtUsd(c.top_implied_usd) + ' implied' })))
+      ));
+    });
+    chainBody.appendChild(el('tr', { class: 'totals' },
+      el('td', null, el('b', { text: 'All chains' })),
+      el('td', { class: 'num', text: String(totalRows) }),
+      el('td', { class: 'num', text: fmtUsd(totalTvl) }),
+      el('td', { class: 'num', text: fmtUsd(totalImplied) }),
+      el('td', { class: 'num', text: '—' }),
+      el('td', { class: 'num', text: '100%' }),
+      el('td', null, el('span', { class: 'sub', text: 'board total' }))
+    ));
+    var chainHead = el('tr', null,
+      el('th', { scope: 'col', text: 'Chain' }),
+      el('th', { scope: 'col', text: 'Protocols' }),
+      el('th', { scope: 'col', text: 'Total TVL' }),
+      el('th', { scope: 'col', text: 'Total implied' }),
+      el('th', { scope: 'col', text: 'Median multiple' }),
+      el('th', { scope: 'col', text: 'Share' }),
+      el('th', { scope: 'col', text: 'Strongest protocol' })
+    );
+    var chainTable = el('table', null,
+      el('caption', { class: 'sub', text: 'Chains by total implied value, strongest first.' }),
+      el('thead', null, chainHead),
+      chainBody
+    );
+    return el('section', { class: 'panel chains' },
+      el('h2', { text: 'Chain breakdown' }),
+      el('p', { class: 'sub', text: 'Where the board lives: every chain the ranked protocols run on, with their combined TVL and implied value. A protocol on several chains counts once per chain, so the protocol column adds up past the board size. ' + (top ? 'Strongest chain: ' + top.chain + ' at ' + fmtUsd(top.total_implied_usd) + ' of implied value.' : 'No chain on the board.') }),
+      el('div', { class: 'table-wrap' }, chainTable),
+      el('p', { class: 'sub', text: 'Readiness across the board: ' + (DATA.readiness_summary ? DATA.readiness_summary.high + ' launch-ready, ' + DATA.readiness_summary.mid + ' warming up, ' + DATA.readiness_summary.low + ' early, mean ' + DATA.readiness_summary.average + ' / 100.' : 'not scored.') + ' ' + readinessExplainer() })
+    );
+  }
+
   function modelPanel() {
     var m = DATA.model;
     var comps = (DATA.comps || []).filter(function (c) { return !c.fallback; }).slice(0, 12);
@@ -321,7 +402,9 @@
       el('h3', { text: 'Category multiples from live tokens' }),
       el('div', { class: 'comps' }, comps.map(function (c) {
         return el('div', null, el('span', { text: c.category + ' (n=' + c.n + ')' }), el('b', { text: 'x' + c.multiple }));
-      }))
+      })),
+      el('h3', { text: 'Readiness bands' }),
+      el('p', { class: 'sub', text: readinessExplainer() + ' Launch-ready means 70 or more, warming up 45 to 69, early days below 45. The bands colour the badges on every board row and in each detail view.' })
     );
   }
 
@@ -339,7 +422,8 @@
       el('div', null,
         el('span', { class: 'brand-name', text: 'Rank ' + row.rank + ' of ' + DATA.board_size + (row.watchlist ? ' · watchlist' : ' · early radar') }),
         el('h2', { id: 'detail-title', text: row.name }),
-        el('p', { class: 'sub', text: (row.category || 'Other') + ' on ' + (row.chains && row.chains.length ? row.chains.join(', ') : 'an unnamed chain') })
+        el('p', { class: 'sub', text: (row.category || 'Other') + ' on ' + (row.chains && row.chains.length ? row.chains.join(', ') : 'an unnamed chain') }),
+        readinessBadge(row.readiness),
       ),
       el('button', { class: 'close', type: 'button', 'aria-label': 'Close details', text: 'Close', onclick: function () { dialog.close(); } })
     ));
@@ -353,7 +437,8 @@
         el('div', null, el('span', { text: 'Growth multiplier' }), el('b', { class: 'num', text: String(row.growth_multiplier) })),
         el('div', null, el('span', { text: 'Maturity multiplier' }), el('b', { class: 'num', text: String(row.maturity_multiplier) })),
         el('div', null, el('span', { text: 'Chain multiplier (' + (row.chains || []).length + ' chains)' }), el('b', { class: 'num', text: String(row.chain_multiplier) })),
-        el('div', null, el('span', { text: 'Implied value' }), el('b', { class: 'num', text: fmtUsd(row.implied_value_usd) }))
+        el('div', null, el('span', { text: 'Implied value' }), el('b', { class: 'num', text: fmtUsd(row.implied_value_usd) })),
+        el('div', null, el('span', { text: 'Readiness score' }), el('b', { class: 'num', text: fmtScore(row.readiness) + ' · ' + readinessLabel(row.readiness) }))
       ),
       el('p', { class: 'sub', text: 'Model ' + DATA.model_version + ': the same function scores every protocol. The page recomputes this row as ' + fmtUsd(impliedOf(row, DATA.model)) + (impliedOf(row, DATA.model) === row.implied_value_usd ? ', the same number board.json carries.' : ', which differs from the board: the data would be stale.') + ' This is an estimate, not a price.' })
     ));
@@ -380,6 +465,7 @@
     shell.appendChild(lede());
     shell.appendChild(controls());
     shell.appendChild(state.tab === 'pre-token' ? boardTable() : liveTable());
+    if (state.tab === 'pre-token') shell.appendChild(chainPanel());
     if (state.tab === 'pre-token') shell.appendChild(modelPanel());
     app.appendChild(shell);
     app.setAttribute('aria-busy', 'false');
